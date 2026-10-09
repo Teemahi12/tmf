@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TMF | BOARDROOM TERMINAL</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+        
+        body { 
+            font-family: 'Space Mono', monospace; 
+            margin: 0;
+            padding: 0;
+            background-image: url('https://i.postimg.cc/1z6hyzDc/IMG-20261008-WA0001(1).jpg');
+            background-size: cover;
+            background-position: center;
+            background-attachment: fixed;
+            background-color: #0e0e0e;
+        }
+
+        .app-overlay {
+            background-color: rgba(0, 0, 0, 0.78); 
+            min-height: 100vh;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            backdrop-filter: blur(2px);
+        }
+
+        .grid-cell { 
+            aspect-ratio: 1 / 1; 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            font-size: 11px; 
+            font-weight: bold;
+            cursor: pointer; 
+            user-select: none;
+            border: 0.5px solid rgba(255,255,255,0.05);
+        }
+        
+        .selected { background-color: white !important; color: black !important; }
+        .found-cell { background-color: rgba(34, 197, 94, 0.6); color: white; text-shadow: 0 0 5px black; }
+
+        * { touch-action: manipulation; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // --- INTEGRATED SUPABASE CREDENTIALS ---
+        const SUPABASE_URL = 'https://sakpiqzhsksvyquhobqd.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNha3BpcXpoc2tzdnlxdWhvYnFkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE1NzE1NzEsImV4cCI6MjEwNzE0NzU3MX0.P61GIURzzrn4tuvAS_OKMgqLBhVeu0clgQoCPzxN7g8';
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        const WORDS = [
+            "PROSPECTUS", "SEAT", "ENROLLMENT", "BRIEFCASE", "RETAIL", 
+            "INVESTOR", "ADVISOR", "GOVERNANCE", "FUND", "BURN", 
+            "SOULBOUND", "DIVIDENDS", "RETIREMENT", "MAILROOM", 
+            "PROXYBALLOT", "SHARECLASS", "INSTITUTIONAL"
+        ];
+        const GRID_SIZE = 12;
+
+        function generateGrid(words) {
+            let grid = Array(GRID_SIZE).fill(null).map(() => Array(GRID_SIZE).fill(''));
+            const directions = [[0,1],[1,0],[1,1],[-1,1],[0,-1],[-1,0],[-1,-1],[1,-1]];
+            words.forEach(word => {
+                let placed = false;
+                let attempts = 0;
+                while (!placed && attempts < 150) {
+                    let dir = directions[Math.floor(Math.random() * directions.length)];
+                    let r = Math.floor(Math.random() * GRID_SIZE);
+                    let c = Math.floor(Math.random() * GRID_SIZE);
+                    if (canPlace(word, r, c, dir, grid)) {
+                        for (let i = 0; i < word.length; i++) {
+                            grid[r + i * dir[0]][c + i * dir[1]] = word[i];
+                        }
+                        placed = true;
+                    }
+                    attempts++;
+                }
+            });
+            for(let r=0; r<GRID_SIZE; r++) {
+                for(let c=0; c<GRID_SIZE; c++) {
+                    if(grid[r][c] === '') grid[r][c] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"[Math.floor(Math.random()*26)];
+                }
+            }
+            return grid;
+        }
+
+        function canPlace(word, r, c, dir, grid) {
+            for (let i = 0; i < word.length; i++) {
+                let nr = r + i * dir[0];
+                let nc = c + i * dir[1];
+                if (nr < 0 || nr >= GRID_SIZE || nc < 0 || nc >= GRID_SIZE || (grid[nr][nc] !== '' && grid[nr][nc] !== word[i])) return false;
+            }
+            return true;
+        }
+
+        function App() {
+            const [view, setView] = useState('login');
+            const [email, setEmail] = useState('');
+            const [score, setScore] = useState(0);
+            const [grid, setGrid] = useState([]);
+            const [foundWords, setFoundWords] = useState([]);
+            const [foundCells, setFoundCells] = useState([]); 
+            const [selection, setSelection] = useState(null);
+            const [leaderboard, setLeaderboard] = useState([]);
+
+            useEffect(() => { setGrid(generateGrid(WORDS)); }, []);
+
+            const login = async (e) => {
+                e.preventDefault();
+                const { data } = await supabaseClient.from('leaderboard').select('*').eq('email', email).single();
+                if (data) {
+                    setScore(data.score);
+                } else {
+                    await supabaseClient.from('leaderboard').insert([{ email, score: 0 }]);
+                }
+                setView('game');
+            };
+
+            const handleCellClick = (r, c) => {
+                if (!selection) {
+                    setSelection({ r, c });
+                } else {
+                    checkWord(selection.r, selection.c, r, c);
+                    setSelection(null);
+                }
+            };
+
+            const checkWord = async (r1, c1, r2, c2) => {
+                let selectedWord = "";
+                let tempCells = [];
+                let dr = r2 - r1;
+                let dc = c2 - c1;
+                let steps = Math.max(Math.abs(dr), Math.abs(dc));
+                if (steps === 0) return;
+                if (dr !== 0 && dc !== 0 && Math.abs(dr) !== Math.abs(dc)) return;
+                let stepR = dr === 0 ? 0 : dr / steps;
+                let stepC = dc === 0 ? 0 : dc / steps;
+
+                for (let i = 0; i <= steps; i++) {
+                    let currR = r1 + i * stepR;
+                    let currC = c1 + i * stepC;
+                    selectedWord += grid[currR][currC];
+                    tempCells.push(`${currR}-${currC}`);
+                }
+
+                if (WORDS.includes(selectedWord) && !foundWords.includes(selectedWord)) {
+                    const newFoundWords = [...foundWords, selectedWord];
+                    setFoundWords(newFoundWords);
+                    setFoundCells([...foundCells, ...tempCells]);
+                    const newScore = score + 100;
+                    setScore(newScore);
+                    await supabaseClient.from('leaderboard').update({ score: newScore }).eq('email', email);
+                }
+            };
+
+            return (
+                <div className="app-overlay px-2">
+                    <header className="w-full max-w-md py-8 flex justify-between items-center px-4">
+                        <div className="flex flex-col">
+                            <h1 className="text-xl font-black italic tracking-tighter text-white">THE MUTUAL FUN</h1>
+                            <span className="text-[8px] text-white/50 tracking-[0.4em] uppercase font-bold font-mono">Executive Terminal</span>
+                        </div>
+                        {view !== 'login' && (
+                            <button onClick={async () => {
+                                const { data } = await supabaseClient.from('leaderboard').select('*').order('score', {ascending: false}).limit(10);
+                                setLeaderboard(data || []);
+                                setView('rank');
+                            }} className="text-[10px] border border-white px-3 py-1 font-bold bg-black/50">RANKINGS</button>
+                        )}
+                    </header>
+
+                    {view === 'login' && (
+                        <div className="mt-12 w-full max-w-xs p-10 bg-black/80 border border-white/20 backdrop-blur-md shadow-2xl">
+                            <form onSubmit={login} className="flex flex-col gap-8 text-center">
+                                <p className="text-[10px] text-gray-400 uppercase tracking-[0.3em]">Identification Required</p>
+                                <input className="bg-transparent border-b border-gray-600 p-2 text-center outline-none text-white focus:border-white transition-all uppercase placeholder-gray-800" 
+                                       onChange={e => setEmail(e.target.value)} required placeholder="INPUT EMAIL" />
+                                <button className="bg-white text-black py-4 text-[10px] font-bold uppercase tracking-widest">Take Your Seat</button>
+                            </form>
+                        </div>
+                    )}
+
+                    {view === 'game' && (
+                        <div className="w-full flex flex-col items-center">
+                            <div className="w-full max-w-sm flex justify-between text-[10px] text-white mb-6 px-4 font-bold tracking-widest drop-shadow-md">
+                                <span>LORE: {foundWords.length}/{WORDS.length}</span>
+                                <span>ALPHA: {score}</span>
+                            </div>
+
+                            <div className="grid grid-cols-12 w-full max-w-[98vw] bg-black/40 border border-white/30 backdrop-blur-sm shadow-2xl">
+                                {grid.map((row, r) => row.map((char, c) => {
+                                    const isSelected = selection?.r === r && selection?.c === c;
+                                    const isFound = foundCells.includes(`${r}-${c}`);
+                                    return (
+                                        <div key={`${r}-${c}`} 
+                                             onClick={() => handleCellClick(r, c)}
+                                             className={`grid-cell ${isSelected ? 'selected' : isFound ? 'found-cell' : 'text-white'}`}>
+                                            {char}
+                                        </div>
+                                    );
+                                }))}
+                            </div>
+
+                            <div className="mt-6 flex flex-wrap justify-center gap-2 px-4 pb-24">
+                                {WORDS.map(w => (
+                                    <span key={w} className={`text-[8px] px-2 py-1 border transition-all ${foundWords.includes(w) ? 'border-green-500 bg-green-500/20 text-green-300 line-through opacity-40' : 'border-white/10 bg-black/40 text-gray-500'}`}>
+                                        {w}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {view === 'rank' && (
+                        <div className="w-full max-w-xs bg-black/90 p-8 border border-white/20 mt-10 backdrop-blur-xl">
+                            <h2 className="text-center text-[10px] mb-8 text-white tracking-[0.5em] font-bold underline underline-offset-8">BOARDROOM RANKINGS</h2>
+                            {leaderboard.map((u, i) => (
+                                <div key={i} className="flex justify-between py-4 border-b border-white/5 text-[10px] tracking-widest uppercase">
+                                    <span className="text-gray-400">#0{i+1} {u.email.split('@')[0]}</span>
+                                    <span className="font-bold text-white">{u.score}</span>
+                                </div>
+                            ))}
+                            <button onClick={() => setView('game')} className="w-full mt-10 text-[10px] font-bold uppercase tracking-widest text-white border border-white py-3 hover:bg-white hover:text-black">Back to Grid</button>
+                        </div>
+                    )}
+
+                    <footer className="mt-auto py-6 text-[7px] text-gray-500 tracking-[0.4em] text-center w-full uppercase font-bold px-4">
+                        The Parable of the Empty Chair | Seat Holders 4,001
+                    </footer>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
